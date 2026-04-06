@@ -1,0 +1,97 @@
+// pages/api/db.js — Shared database via Upstash Redis
+// Env vars: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, CW_DB_SECRET
+//
+// KEY DESIGN:
+//   cw_users, cw_codes, cw_ambassadors, cw_feedback, cw_seeded  → normal JSON
+//   cw_subs          → array of submissions WITHOUT receipt images (metadata only)
+//   cw_receipt_<id>  → receipt image stored separately (avoids 1MB Redis limit)
+
+const UPSTASH_URL   = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const DB_SECRET     = process.env.CW_DB_SECRET || 'cw_dev_secret';
+
+const mem = {};
+
+async function rGet(key) {
+  if (!UPSTASH_URL) return mem[key] ?? null;
+  try {
+    const r = await fetch(`${UPSTASH_URL}/get/${key}`, {
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+    });
+    const d = await r.json();
+    if (d.result == null) return null;
+    return JSON.parse(d.result);
+  } catch { return mem[key] ?? null; }
+}
+
+async function rSet(key, value) {
+  mem[key] = value;
+  if (!UPSTASH_URL) return;
+  try {
+    await fetch(`${UPSTASH_URL}/set/${key}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: JSON.stringify(value) }),
+    });
+  } catch (e) { console.error('Redis set error:', e.message); }
+}
+
+async function rDel(key) {
+  delete mem[key];
+  if (!UPSTASH_URL) return;
+  try {
+    await fetch(`${UPSTASH_URL}/del/${key}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+    });
+  } catch {}
+}
+
+const ALLOWED_KEYS = ['users','codes','subs','ambassadors','feedback','seeded','announcement'];
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const { action, key, value, secret, receiptId } = req.body || {};
+
+  // ── Special: get a receipt image by ID ───────────────────────────────────
+  if (action === 'get_receipt') {
+    if (!receiptId) return res.status(400).json({ error: 'Missing receiptId' });
+    const img = await rGet(`cw_receipt_${receiptId}`);
+    return res.status(200).json({ value: img });
+  }
+
+  // ── Special: save receipt image separately from submission metadata ───────
+  if (action === 'set_receipt') {
+    if (secret !== DB_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+    if (!receiptId || !value) return res.status(400).json({ error: 'Missing receiptId or value' });
+    await rSet(`cw_receipt_${receiptId}`, value);
+    return res.status(200).json({ ok: true });
+  }
+
+  // ── Normal get/set for shared keys ────────────────────────────────────────
+  if (!key || !ALLOWED_KEYS.includes(key))
+    return res.status(400).json({ error: 'Invalid key' });
+
+  if (action === 'set' && secret !== DB_SECRET)
+    return res.status(403).json({ error: 'Unauthorized' });
+
+  try {
+    if (action === 'get') {
+      const data = await rGet(`cw_${key}`);
+      return res.status(200).json({ value: data });
+    }
+    if (action === 'set') {
+      if (value === undefined) return res.status(400).json({ error: 'Missing value' });
+      await rSet(`cw_${key}`, value);
+      return res.status(200).json({ ok: true });
+    }
+    return res.status(400).json({ error: 'Invalid action' });
+  } catch (e) {
+    return res.status(500).json({ error: 'DB error: ' + e.message });
+  }
+}
