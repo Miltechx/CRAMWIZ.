@@ -56,48 +56,30 @@ const DB = {
   del: (k) => { try { localStorage.removeItem('cw3_'+k) } catch {} },
 };
 
-// ── SDB: server-side Redis for shared data (users, codes, subs, ambassadors) ─
-// Secret: works with NEXT_PUBLIC_CW_DB_SECRET or cw_dev_secret env var names
-const _SDB_SECRET = process.env.NEXT_PUBLIC_CW_DB_SECRET || process.env.NEXT_PUBLIC_cw_dev_secret || 'cw_dev_secret';
+// ── SDB: server-side Redis for shared data ────────────────────────────────
 const SDB = {
   get: async (key) => {
     try {
-      const res = await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'get', key }),
-      });
-      const data = await res.json();
-      return data.value ?? null;
+      const r = await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'get', key }) });
+      const d = await r.json();
+      return d.value ?? null;
     } catch { return null; }
   },
   set: async (key, value) => {
     try {
-      await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'set', key, value, secret: _SDB_SECRET }),
-      });
-    } catch (e) { console.error('SDB.set error:', e); }
+      await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'set', key, value }) });
+    } catch(e) { console.error('SDB.set error:', e); }
   },
   setReceipt: async (id, dataUrl) => {
     try {
-      await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'set_receipt', receiptId: id, value: dataUrl, secret: _SDB_SECRET }),
-      });
+      await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'set_receipt', receiptId:id, value:dataUrl }) });
     } catch {}
   },
   getReceipt: async (id) => {
     try {
-      const res = await fetch('/api/db', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'get_receipt', receiptId: id }),
-      });
-      const data = await res.json();
-      return data.value ?? null;
+      const r = await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'get_receipt', receiptId:id }) });
+      const d = await r.json();
+      return d.value ?? null;
     } catch { return null; }
   },
 };
@@ -2580,6 +2562,12 @@ function SectionAdmin() {
           setSubs(s||[]); setCodes(c||{}); setUsers(u||{}); setAmbassadors(a||{}); setFeedback(fb||[]);
           setAdminLoading(false); alert('✅ Refreshed from server');
         }}>↻ Refresh</Btn>
+        <Btn variant="danger" onClick={async () => {
+          if (!confirm('⚠️ RESET ALL DATA?\n\nThis will delete ALL users, codes, payments, and ambassadors from Redis.\n\nThe 2000 codes will be reseeded automatically.\n\nType OK to confirm.')) return;
+          await fetch('/api/db', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action:'flush_all' }) });
+          alert('✅ All data cleared. Reload the page — codes will reseed automatically.');
+          window.location.reload();
+        }} style={{ fontSize: '.75rem' }}>🗑 Reset DB</Btn>
         <Btn variant="outline" onClick={() => exportCSV(subs.map(s => ({ id:s.id, name:s.name, email:s.email, phone:s.phone||'', status:s.status, code:s.codeAssigned||'', ref:s.ref||'', ambassador:s.ambName||'', submitted:s.submittedAt })), 'cramwiz_payments.csv')}>⬇ Export Payments CSV</Btn>
         <Btn variant="outline" onClick={() => exportCSV(Object.entries(users).filter(([e])=>e!=='admin@cramwiz.com').map(([email,u])=>({email,name:u.name,dept:u.dept||'',uni:u.uni||'',status:u.disabled?'disabled':'active',code:Object.entries(codes).find(([,v])=>v.usedBy===email)?.[0]||''})), 'cramwiz_users.csv')}>⬇ Export Users CSV</Btn>
       </div>
