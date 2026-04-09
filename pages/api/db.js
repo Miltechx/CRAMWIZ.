@@ -1,14 +1,8 @@
 // pages/api/db.js — Shared database via Upstash Redis
-// Env vars: UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN, CW_DB_SECRET
-//
-// KEY DESIGN:
-//   cw_users, cw_codes, cw_ambassadors, cw_feedback, cw_seeded  → normal JSON
-//   cw_subs          → array of submissions WITHOUT receipt images (metadata only)
-//   cw_receipt_<id>  → receipt image stored separately (avoids 1MB Redis limit)
+// No client secret needed — Upstash credentials are server-only
 
 const UPSTASH_URL   = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-const DB_SECRET = process.env.CW_DB_SECRET || process.env.cw_dev_secret || 'cw_dev_secret';
 
 const mem = {};
 
@@ -56,29 +50,32 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { action, key, value, secret, receiptId } = req.body || {};
+  const { action, key, value, receiptId } = req.body || {};
 
-  // ── Special: get a receipt image by ID ───────────────────────────────────
+  // Flush all CramWiz keys (admin reset)
+  if (action === 'flush_all') {
+    const keys = ['cw_users','cw_codes','cw_subs','cw_ambassadors','cw_feedback','cw_seeded','cw_announcement'];
+    await Promise.all(keys.map(k => rDel(k)));
+    return res.status(200).json({ ok: true });
+  }
+
+  // Get receipt image by submission ID
   if (action === 'get_receipt') {
     if (!receiptId) return res.status(400).json({ error: 'Missing receiptId' });
     const img = await rGet(`cw_receipt_${receiptId}`);
     return res.status(200).json({ value: img });
   }
 
-  // ── Special: save receipt image separately from submission metadata ───────
+  // Save receipt image separately (keeps subs array small)
   if (action === 'set_receipt') {
-    if (secret !== DB_SECRET) return res.status(403).json({ error: 'Unauthorized' });
     if (!receiptId || !value) return res.status(400).json({ error: 'Missing receiptId or value' });
     await rSet(`cw_receipt_${receiptId}`, value);
     return res.status(200).json({ ok: true });
   }
 
-  // ── Normal get/set for shared keys ────────────────────────────────────────
+  // Normal get/set
   if (!key || !ALLOWED_KEYS.includes(key))
     return res.status(400).json({ error: 'Invalid key' });
-
-  if (action === 'set' && secret !== DB_SECRET)
-    return res.status(403).json({ error: 'Unauthorized' });
 
   try {
     if (action === 'get') {
