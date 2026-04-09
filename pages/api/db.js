@@ -8,7 +8,7 @@
 
 const UPSTASH_URL   = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-const DB_SECRET     = process.env.CW_DB_SECRET || 'cw_dev_secret';
+const DB_SECRET = process.env.CW_DB_SECRET || process.env.cw_dev_secret || 'cw_dev_secret';
 
 const mem = {};
 
