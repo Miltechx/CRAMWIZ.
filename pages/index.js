@@ -57,6 +57,8 @@ const DB = {
 };
 
 // ── SDB: server-side Redis for shared data (users, codes, subs, ambassadors) ─
+// Secret: works with NEXT_PUBLIC_CW_DB_SECRET or cw_dev_secret env var names
+const _SDB_SECRET = process.env.NEXT_PUBLIC_CW_DB_SECRET || process.env.NEXT_PUBLIC_cw_dev_secret || 'cw_dev_secret';
 const SDB = {
   get: async (key) => {
     try {
@@ -74,10 +76,7 @@ const SDB = {
       await fetch('/api/db', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'set', key, value,
-          secret: process.env.NEXT_PUBLIC_CW_DB_SECRET || 'cw_dev_secret',
-        }),
+        body: JSON.stringify({ action: 'set', key, value, secret: _SDB_SECRET }),
       });
     } catch (e) { console.error('SDB.set error:', e); }
   },
@@ -86,10 +85,7 @@ const SDB = {
       await fetch('/api/db', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'set_receipt', receiptId: id, value: dataUrl,
-          secret: process.env.NEXT_PUBLIC_CW_DB_SECRET || 'cw_dev_secret',
-        }),
+        body: JSON.stringify({ action: 'set_receipt', receiptId: id, value: dataUrl, secret: _SDB_SECRET }),
       });
     } catch {}
   },
@@ -735,7 +731,12 @@ function Subscribe({ onNavigate }) {
               </div>
             </div>
             <Btn onClick={submit} disabled={loading} full>{loading ? 'Submitting...' : 'Submit Receipt for Review'}</Btn>
-            <p style={{ fontSize: '.72rem', color: 'var(--wd)', textAlign: 'center', marginTop: 10 }}>We verify and send your code — usually within a few hours.</p>
+            <p style={{ fontSize: '.72rem', color: 'var(--wd)', textAlign: 'center', marginTop: 8 }}>
+              By submitting, you agree to CramWiz's{' '}
+              <button type="button" onClick={() => onNavigate('terms')} style={{ background: 'none', border: 'none', color: 'var(--bb)', cursor: 'pointer', fontSize: '.72rem', textDecoration: 'underline', padding: 0 }}>Terms & Conditions</button>
+              . Access valid until Oct 31, 2026. No refunds once code is issued.
+            </p>
+            <p style={{ fontSize: '.72rem', color: 'var(--wd)', textAlign: 'center', marginTop: 4 }}>We verify and send your code — usually within a few hours.</p>
           </div>
 
           <div style={{ ...S.card, opacity: .6 }}>
@@ -904,6 +905,7 @@ function Register({ onNavigate, onLogin }) {
   const [uni, setUni] = useState('');
   const [code, setCode] = useState('');
   const [isFy, setIsFy] = useState(false);
+  const [agreedTerms, setAgreedTerms] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -911,6 +913,7 @@ function Register({ onNavigate, onLogin }) {
     setError('');
     if (!name || !email || !pw || !code) { setError('Fill in all required fields.'); return; }
     if (pw.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    if (!agreedTerms) { setError('Please read and accept the Terms & Conditions to continue.'); return; }
     setLoading(true);
     const codes = await SDB.get('codes') || {};
     const uc = code.trim().toUpperCase();
@@ -962,7 +965,17 @@ function Register({ onNavigate, onLogin }) {
           <input type="checkbox" checked={isFy} onChange={e => setIsFy(e.target.checked)} style={{ accentColor: 'var(--bb)' }} />
           <span style={{ fontSize: '.83rem', color: 'var(--wd)' }}>I am a final year student</span>
         </label>
-        <Btn full onClick={doRegister} disabled={loading} style={{ marginTop: 8 }}>{loading ? 'Creating account…' : 'Create My Account'}</Btn>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 18, cursor: 'pointer', padding: '10px 12px', background: agreedTerms ? 'rgba(26,108,255,.08)' : 'rgba(255,255,255,.03)', border: `1px solid ${agreedTerms ? 'rgba(26,108,255,.3)' : 'var(--wf)'}`, borderRadius: 'var(--rs)' }}>
+          <input type="checkbox" checked={agreedTerms} onChange={e => setAgreedTerms(e.target.checked)} style={{ accentColor: 'var(--bb)', marginTop: 2, flexShrink: 0 }} />
+          <span style={{ fontSize: '.82rem', color: 'var(--wd)', lineHeight: 1.6 }}>
+            I have read and agree to CramWiz's{' '}
+            <button type="button" onClick={() => onNavigate('terms')} style={{ background: 'none', border: 'none', color: 'var(--bb)', cursor: 'pointer', fontSize: '.82rem', textDecoration: 'underline', padding: 0 }}>
+              Terms & Conditions
+            </button>
+            , including the access policy, refund policy, and the November 1, 2026 subscription transition.
+          </span>
+        </label>
+        <Btn full onClick={doRegister} disabled={loading || !agreedTerms} style={{ marginTop: 8, opacity: agreedTerms ? 1 : 0.6 }}>{loading ? 'Creating account…' : 'Create My Account'}</Btn>
         <hr style={{ border: 'none', borderTop: '1px solid var(--wf)', margin: '18px 0' }} />
         <p style={{ textAlign: 'center', fontSize: '.875rem', color: 'var(--wd)' }}>
           Already have an account?{' '}
@@ -1581,11 +1594,12 @@ RULES:
 - Be ACCURATE. Double-check every step.
 
 Questions to solve:
-${batch.map((q,idx) => `Q${idx+1} (${q.type}): ${q.question}`).join('\n')}
+${batch.map((q,idx) => `Q${idx+1} [${q.type||'theory'}] (${q.marks||'?'} marks): ${q.question}`).join('\n')}
 
-Respond ONLY with valid JSON (no extra text outside the JSON):
-{"answers":[{"number":"${batch[0]?.number}","answer":"complete solution here","type":"${batch[0]?.type}"}]}
-Include exactly ${batch.length} answer objects matching the questions above.`;
+You MUST return a JSON object with exactly ${batch.length} answer(s).
+Respond ONLY with this exact JSON structure — no text before or after, no markdown:
+{"answers":[${batch.map((_,idx)=>`{"number":${idx+1},"answer":"full solution here"}`).join(',')}]}
+Replace each "full solution here" with the complete answer for that question.`;
           const solved = await aiCall(batchPrompt, 6000);
           const answers = solved.answers || [];
           answers.forEach((ans, idx) => {
